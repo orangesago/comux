@@ -2,6 +2,63 @@ import XCTest
 @testable import Comux
 
 final class AccountSnapshotMergerTests: XCTestCase {
+    func testPartialWorkspaceRefreshUpdatesCurrentUsageAndPreservesFailedWorkspaceHistory() async throws {
+        let cachedCurrent = self.makeSnapshot(
+            accountId: "person@example.com::personal-workspace",
+            email: "person@example.com",
+            workspaceId: "personal-workspace",
+            workspaceLabel: "Personal",
+            source: "live system auth",
+            isCurrentSystemAccount: true,
+            systemAuthProfileId: "profile-1",
+            weeklyUsedPercentage: 30
+        )
+        let cachedRemote = self.makeSnapshot(
+            accountId: "person@example.com::workspace-a",
+            email: "person@example.com",
+            workspaceId: "workspace-a",
+            workspaceLabel: "Workspace A",
+            source: "live system auth",
+            isCurrentSystemAccount: false,
+            systemAuthProfileId: "profile-1",
+            weeklyUsedPercentage: 64
+        )
+        let refreshedCurrent = self.makeSnapshot(
+            accountId: cachedCurrent.accountId,
+            email: cachedCurrent.email,
+            workspaceId: cachedCurrent.workspaceId,
+            workspaceLabel: cachedCurrent.workspaceLabel,
+            source: "live system auth",
+            isCurrentSystemAccount: true,
+            systemAuthProfileId: "profile-1",
+            lastSyncedAt: "2026-05-28T01:00:00Z",
+            weeklyUsedPercentage: 11
+        )
+        let remoteSnapshots: [AccountSnapshot] = try await BoundedConcurrency.mapSuccessful(
+            [cachedRemote],
+            limit: RefreshConcurrencyPolicy.maximumConcurrentFetches
+        ) { _ in
+            throw PulseError.invalidUsageResponse
+        }
+
+        let merged = AccountSnapshotMerger().merge(
+            existing: CachePayload(meta: CacheMeta(source: "test"), accounts: [cachedCurrent, cachedRemote]),
+            incoming: [refreshedCurrent] + remoteSnapshots,
+            systemStateWasRefreshed: true
+        )
+
+        XCTAssertEqual(merged.accounts.count, 2)
+        let remote = try XCTUnwrap(merged.accounts.first(where: { $0.id == cachedRemote.id }))
+        XCTAssertEqual(remote.usageWindows, cachedRemote.usageWindows)
+        XCTAssertEqual(remote.lastSyncedAt, cachedRemote.lastSyncedAt)
+        XCTAssertEqual(remote.workspaceId, cachedRemote.workspaceId)
+        XCTAssertEqual(remote.isCurrentSystemAccount, false)
+        let current = try XCTUnwrap(merged.accounts.first(where: { $0.isCurrentSystemAccount == true }))
+        XCTAssertEqual(current.id, cachedCurrent.id)
+        XCTAssertEqual(remainingPercentage(for: current.weeklyWindow), 89)
+        XCTAssertEqual(current.lastSyncedAt, refreshedCurrent.lastSyncedAt)
+    }
+
     func testTransientCookieOnlyRefreshPreservesCurrentSystemSeat() {
         let merger = AccountSnapshotMerger()
         let existingActive = self.makeSnapshot(
