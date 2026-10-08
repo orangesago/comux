@@ -1,4 +1,21 @@
 enum BoundedConcurrency {
+    static func mapSuccessful<Input: Sendable, Output: Sendable>(
+        _ inputs: [Input],
+        limit: Int,
+        operation: @escaping @Sendable (Input) async throws -> Output
+    ) async throws -> [Output] {
+        let results: [Output?] = try await self.map(inputs, limit: limit) { input in
+            do {
+                return try await operation(input)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                return nil
+            }
+        }
+        return results.compactMap { $0 }
+    }
+
     static func map<Input: Sendable, Output: Sendable>(
         _ inputs: [Input],
         limit: Int,

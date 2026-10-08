@@ -304,7 +304,7 @@ final class PulseCoordinator: ObservableObject {
             indexedSnapshots.append((index, snapshot))
         }
 
-        let remoteSnapshots = try await BoundedConcurrency.map(
+        let remoteSnapshots = try await BoundedConcurrency.mapSuccessful(
             remoteWorkspaceItems,
             limit: RefreshConcurrencyPolicy.maximumConcurrentFetches
         ) { [self] indexedWorkspace in
